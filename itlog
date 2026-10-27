@@ -1,0 +1,195 @@
+
+-- MovementGuideServer
+-- Place in ServerScriptService
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+local remote = ReplicatedStorage:FindFirstChild("MovementGuideEvent")
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = "MovementGuideEvent"
+    remote.Parent = ReplicatedStorage
+end
+
+local MAX_COORD = 100000
+local MAX_WALK_SPEED = 100
+local MIN_TWEEN_SPEED = 1
+local MAX_TWEEN_SPEED = 200
+
+local lastRequest = {}
+local activeTweens = {}
+local noclipEnabled = {}
+local originalCollision = {}
+
+local function validVector(value)
+    return typeof(value) == "Vector3"
+        and math.abs(value.X) <= MAX_COORD
+        and math.abs(value.Y) <= MAX_COORD
+        and math.abs(value.Z) <= MAX_COORD
+end
+
+local function getCharacter(player)
+    local character = player.Character
+    if not character then return nil end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or not root or humanoid.Health <= 0 then
+        return nil
+    end
+
+    return character, humanoid, root
+end
+
+local function stopTween(player)
+    local tween = activeTweens[player]
+    if tween then
+        tween:Cancel()
+        activeTweens[player] = nil
+    end
+end
+
+local function setNoclip(player, enabled)
+    noclipEnabled[player] = enabled == true
+
+    local character = player.Character
+    if not character then return end
+
+    originalCollision[player] = originalCollision[player] or {}
+
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if enabled then
+                if originalCollision[player][part] == nil then
+                    originalCollision[player][part] = part.CanCollide
+                end
+                part.CanCollide = false
+            else
+                local old = originalCollision[player][part]
+                if old ~= nil then
+                    part.CanCollide = old
+                    originalCollision[player][part] = nil
+                end
+            end
+        end
+    end
+
+    if not enabled then
+        table.clear(originalCollision[player])
+    end
+end
+
+local function setupPlayer(player)
+    player.CharacterAdded:Connect(function(character)
+        originalCollision[player] = {}
+
+        if noclipEnabled[player] then
+            task.wait(0.2)
+            if player.Character == character then
+                setNoclip(player, true)
+            end
+        end
+    end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+    setupPlayer(player)
+end
+
+remote.OnServerEvent:Connect(function(player, action, value, extra)
+    -- Basic request throttling
+    local now = os.clock()
+    if now - (lastRequest[player] or 0) < 0.08 then
+        return
+    end
+    lastRequest[player] = now
+
+    if action == "Noclip" then
+        if typeof(value) == "boolean" then
+            setNoclip(player, value)
+        end
+        return
+    end
+
+    local character, humanoid, root = getCharacter(player)
+    if not character then return end
+
+    if action == "Teleport" then
+        if not validVector(value) then return end
+
+        stopTween(player)
+        character:PivotTo(
+            CFrame.new(value) * root.CFrame.Rotation
+        )
+
+    elseif action == "Tween" then
+        if not validVector(value) then return end
+        if typeof(extra) ~= "number"
+            or extra ~= extra
+            or extra < MIN_TWEEN_SPEED
+            or extra > MAX_TWEEN_SPEED then
+            return
+        end
+
+        stopTween(player)
+
+        local destination = CFrame.new(value) * root.CFrame.Rotation
+        local distance = (root.Position - value).Magnitude
+        local duration = math.max(distance / extra, 0.05)
+
+        local tween = TweenService:Create(
+            root,
+            TweenInfo.new(duration, Enum.EasingStyle.Linear),
+            {CFrame = destination}
+        )
+
+        activeTweens[player] = tween
+        tween.Completed:Connect(function()
+            if activeTweens[player] == tween then
+                activeTweens[player] = nil
+            end
+        end)
+        tween:Play()
+
+    elseif action == "Speed" then
+        if typeof(value) ~= "number"
+            or value ~= value
+            or value < 0
+            or value > MAX_WALK_SPEED then
+            return
+        end
+
+        humanoid.WalkSpeed = value
+    end
+end)
+
+-- Handle parts added during noclip and preserve their original collision.
+RunService.Heartbeat:Connect(function()
+    for player, enabled in pairs(noclipEnabled) do
+        if enabled and player.Character then
+            local saved = originalCollision[player]
+            if saved then
+                for _, part in ipairs(player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        if saved[part] == nil then
+                            saved[part] = part.CanCollide
+                        end
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    stopTween(player)
+    lastRequest[player] = nil
+    noclipEnabled[player] = nil
+    originalCollision[player] = nil
+end)
