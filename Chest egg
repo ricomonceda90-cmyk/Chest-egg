@@ -1,0 +1,247 @@
+
+-- MovementGuide
+-- Place in StarterPlayer > StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local remote = ReplicatedStorage:WaitForChild("MovementGuideEvent")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MovementGuide"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(280, 390)
+frame.Position = UDim2.new(0, 20, 0.3, 0)
+frame.BackgroundColor3 = Color3.fromRGB(30, 32, 42)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -45, 0, 42)
+title.Position = UDim2.fromOffset(12, 0)
+title.BackgroundTransparency = 1
+title.Text = "Movement Guide"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.TextSize = 20
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(32, 30)
+close.Position = UDim2.new(1, -38, 0, 6)
+close.Text = "X"
+close.TextColor3 = Color3.new(1, 1, 1)
+close.BackgroundColor3 = Color3.fromRGB(190, 55, 65)
+close.Parent = frame
+
+local function makeBox(placeholder, y, default)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -24, 0, 32)
+    box.Position = UDim2.fromOffset(12, y)
+    box.BackgroundColor3 = Color3.fromRGB(48, 51, 64)
+    box.TextColor3 = Color3.new(1, 1, 1)
+    box.PlaceholderColor3 = Color3.fromRGB(190, 190, 200)
+    box.PlaceholderText = placeholder
+    box.Text = default or ""
+    box.TextSize = 14
+    box.Font = Enum.Font.Gotham
+    box.ClearTextOnFocus = false
+    box.Parent = frame
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = box
+    return box
+end
+
+local xBox = makeBox("Destination X", 52, "0")
+local yBox = makeBox("Destination Y", 90, "10")
+local zBox = makeBox("Destination Z", 128, "0")
+local speedBox = makeBox("Walk speed (0-100)", 166, "16")
+local tweenBox = makeBox("Tween speed (studs/second)", 204, "50")
+
+local function makeButton(text, y, color)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, -24, 0, 32)
+    button.Position = UDim2.fromOffset(12, y)
+    button.BackgroundColor3 = color
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.Text = text
+    button.TextSize = 14
+    button.Font = Enum.Font.GothamBold
+    button.Parent = frame
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = button
+    return button
+end
+
+local tpButton = makeButton(
+    "INSTANT TELEPORT", 244, Color3.fromRGB(65, 115, 220)
+)
+local tweenButton = makeButton(
+    "TWEEN TO POSITION", 282, Color3.fromRGB(125, 80, 200)
+)
+local speedButton = makeButton(
+    "APPLY WALK SPEED", 320, Color3.fromRGB(35, 145, 110)
+)
+local noclipButton = makeButton(
+    "NOCLIP: OFF", 358, Color3.fromRGB(175, 100, 40)
+)
+
+local function getDestination()
+    local x = tonumber(xBox.Text)
+    local y = tonumber(yBox.Text)
+    local z = tonumber(zBox.Text)
+
+    if not x or not y or not z then
+        return nil
+    end
+
+    if math.abs(x) > 100000
+        or math.abs(y) > 100000
+        or math.abs(z) > 100000 then
+        return nil
+    end
+
+    return Vector3.new(x, y, z)
+end
+
+tpButton.Activated:Connect(function()
+    local destination = getDestination()
+    if destination then
+        remote:FireServer("Teleport", destination)
+    end
+end)
+
+tweenButton.Activated:Connect(function()
+    local destination = getDestination()
+    local speed = tonumber(tweenBox.Text)
+
+    if destination and speed and speed > 0 then
+        -- The server controls the tween duration.
+        -- This button uses the server's default speed.
+        remote:FireServer("Tween", destination)
+    end
+end)
+
+speedButton.Activated:Connect(function()
+    local speed = tonumber(speedBox.Text)
+    if speed and speed >= 0 and speed <= 100 then
+        remote:FireServer("Speed", speed)
+    end
+end)
+
+-- Client-side noclip for your own Studio game.
+local noclip = false
+local originalCollision = {}
+
+local function setNoclip(enabled)
+    noclip = enabled
+
+    if not enabled then
+        for part, oldValue in pairs(originalCollision) do
+            if part and part.Parent then
+                part.CanCollide = oldValue
+            end
+        end
+        table.clear(originalCollision)
+    end
+
+    noclipButton.Text = enabled and "NOCLIP: ON" or "NOCLIP: OFF"
+    noclipButton.BackgroundColor3 = enabled
+        and Color3.fromRGB(200, 55, 55)
+        or Color3.fromRGB(175, 100, 40)
+end
+
+noclipButton.Activated:Connect(function()
+    setNoclip(not noclip)
+end)
+
+local function setupCharacter(character)
+    originalCollision = {}
+
+    if noclip then
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                originalCollision[part] = part.CanCollide
+                part.CanCollide = false
+            end
+        end
+    end
+end
+
+player.CharacterAdded:Connect(setupCharacter)
+if player.Character then
+    setupCharacter(player.Character)
+end
+
+-- Keep newly added character parts non-collidable while enabled.
+game:GetService("RunService").Stepped:Connect(function()
+    if not noclip then return end
+
+    local character = player.Character
+    if not character then return end
+
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if originalCollision[part] == nil then
+                originalCollision[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+    end
+end)
+
+-- Drag the window using its title area.
+local dragging = false
+local dragStart
+local startPosition
+
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPosition = frame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+close.Activated:Connect(function()
+    setNoclip(false)
+    gui:Destroy()
+end)
